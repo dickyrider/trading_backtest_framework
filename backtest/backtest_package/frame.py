@@ -2,7 +2,7 @@ import pandas as pd
 
 class Backtest:
     def __init__(self, initial_cash=0):
-        self.df = pd.DataFrame()  # 存储不同股票的数据
+        self.df = pd.DataFrame()  
         self.strategies = []
         self.results = {}
         self.cash = 0
