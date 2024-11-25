@@ -4,7 +4,7 @@ setup(
     name='backtest',
     version='0.1',
     packages=find_packages(),
-    description='A simple backtesting framework',
+    description='A simple backtest framework',
     author='Dicky',
     author_email='dickyrider@gmail.com',
     url='https://github.com/dickyrider/my_backtest',
