@@ -12,28 +12,35 @@ class Backtest:
         self.analyse_tool = self.AnalyseTool(self)
         self.ticker_lst = []
     
-    def initital_cash(self, initial_cash): #Reset equity and cash
-        self.cash  = initial_cash 
+    def initital_cash(self, initial_cash):
+        self.cash  = initial_cash
         self.equity = self.cash
 
-    def add_data(self, dataname, data): 
-        data.columns = [dataname] 
+    def add_data(self, dataname, data):
+        self.ticker = dataname
         self.df = pd.concat([self.df, data], axis=1)
+        self.df = self.df.rename(columns={'Adj Close': dataname})
         self.df['Cash'] = self.df['Cash'].fillna(self.cash)
         self.df['Total_equity'] = self.df['Total_equity'].fillna(self.cash)
         self.df[dataname + '_holding_position'] = 0
+        self.df[dataname + '_average_cost'] = 0
+        self.df[dataname + '_action_signal'] = 0
         self.df[dataname + '_holding_market_value'] = 0
         self.df[dataname + '_holding_PnL'] = 0
         self.results[dataname] = []  
 
-    def add_strategy(self, strategy_class, **optimized_factors): 
-        strategy_instance = strategy_class(self.df, **optimized_factors) 
+    def add_strategy(self, strategy_class, **kwargs):
+        strategy_instance = strategy_class(self.df, **kwargs) 
+        if hasattr(strategy_instance, 'add_reference_data'):
+            print("Adding reference data.")
+            strategy_instance.add_reference_data(self, self.ticker)
+        else:
+            print("add_reference_data method not found.")
         self.strategies.append(strategy_instance)
 
     def run(self):
         for strategy in self.strategies:
             for col in self.df.columns:
-                print(col)
                 if col[-17:] == '_holding_position':
                     ticker = col.split('_')[0]
                     self.ticker_lst.append(ticker)
