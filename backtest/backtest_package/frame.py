@@ -1,8 +1,9 @@
 import pandas as pd
+import numpy as np
 
 class Backtest:
     def __init__(self, initial_cash=0):
-        self.df = pd.DataFrame()  
+        self.df = pd.DataFrame()  # 存储不同股票的数据
         self.df['Total_equity'] = 0
         self.df['Cash'] = 0
         self.strategies = []
@@ -19,7 +20,7 @@ class Backtest:
     def add_data(self, dataname, data):
         self.ticker = dataname
         self.df = pd.concat([self.df, data], axis=1)
-        self.df = self.df.rename(columns={'Adj Close': dataname})
+        self.df = self.df.rename(columns={'Close': dataname})
         self.df['Cash'] = self.df['Cash'].fillna(self.cash)
         self.df['Total_equity'] = self.df['Total_equity'].fillna(self.cash)
         self.df[dataname + '_holding_position'] = 0
@@ -50,10 +51,12 @@ class Backtest:
     def calculate_return(self):
         for ticker in self.ticker_lst:
             self.df[ticker + '_holding_market_value'] = self.df[ticker + '_holding_position'] * self.df[ticker]
-            self.df[ticker + '_holding_PnL'] = self.df[ticker + '_holding_market_value'].pct_change()
-            self.df[ticker + '_holding_PnL'] = self.df[ticker + '_holding_PnL'].replace([float('inf'), -float('inf')], 1)
-            self.df['Daily_return'] = self.df['Total_equity'].pct_change().dropna()
+            self.df[ticker + '_holding_PnL'] = (
+                (self.df[ticker] - self.df[ticker + '_average_cost']) * self.df[ticker + '_holding_position']
+            ).fillna(0)
+            self.df['Daily_return'] = self.df['Total_equity'].pct_change().fillna(0)
             self.returns = self.df['Daily_return']
+
 
     def reset(self, initial_cash=0):
         self.df = pd.DataFrame() 
