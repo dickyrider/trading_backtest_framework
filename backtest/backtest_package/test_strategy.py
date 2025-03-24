@@ -20,6 +20,32 @@ class Strategy:
         backtest.df['EWA_diff'] = backtest.df['L_EWA'] - backtest.df['S_EWA'] 
         backtest.df['Average_Volume'] = backtest.df['Volume'].ewm(span=self.volume_window, adjust=False).mean()
 
+        delta = backtest.df[ticker].diff()
+        gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        backtest.df['RSI'] = 100 - (100 / (1 + rs))
+
+        short_ema = backtest.df[ticker].ewm(span=12, adjust=False).mean()
+        long_ema = backtest.df[ticker].ewm(span=26, adjust=False).mean()
+
+        #MACD
+        backtest.df['MACD'] = short_ema - long_ema
+        backtest.df['Signal_Line'] = backtest.df['MACD'].ewm(span=9, adjust=False).mean()
+        backtest.df['MACD_diff'] = backtest.df['MACD'] - backtest.df['Signal_Line']
+
+        #Bollinger Band
+        backtest.df['Middle_Band'] = backtest.df[ticker].rolling(window=20).mean()
+        std = backtest.df[ticker].rolling(window=20).std()
+        backtest.df['Upper_Band'] = backtest.df['Middle_Band'] + (2 * std)
+        backtest.df['Lower_Band'] = backtest.df['Middle_Band'] - (2 * std)
+        backtest.df['band_width'] = (backtest.df['Upper_Band'] - backtest.df['Lower_Band']) / backtest.df['Middle_Band'] 
+        rolling_window = 40
+        backtest.df['bb_width_mean'] = backtest.df['band_width'].rolling(window=rolling_window).mean()
+
+        #Drop NaN
+        backtest.df.dropna(inplace=True)
+
     def next(self, ticker, backtest, index):
         current_index = backtest.df.index.get_loc(index)
         if current_index < self.long_window:  
@@ -37,6 +63,7 @@ class Strategy:
 
         #Position 
         stock_price = backtest.df.loc[index, ticker]
+        stock_open = backtest.df.loc[index, 'Open']
         total_equity = backtest.df.loc[index, 'Total_equity']
         volume = backtest.df.loc[index,'Volume']
         holding_position = backtest.df.loc[index, ticker + '_holding_position'] 
@@ -56,8 +83,11 @@ class Strategy:
         bb_upper = backtest.df.loc[last_index, 'Upper_Band']
         bb_lower = backtest.df.loc[last_index, 'Lower_Band']
         bb_width = (bb_upper - bb_lower) / bb_mid 
-        bb_width_rolling_mean = stock_df['bb_width_mean']
+        bb_width_rolling_mean =  backtest.df['bb_width_mean']
         ADX = backtest.df.loc[last_index, 'ADX_14']
+        k_stochastic = backtest.df.loc[last_index, 'STOCHk_14_3_3']
+        d_stochastic = backtest.df.loc[last_index, 'STOCHk_14_3_3']
+        k_d_stochastic_diff = backtest.df.loc[last_index, 'STOCHk_14_3_3'] - backtest.df.loc[last_index, 'STOCHk_14_3_3']
         ema_10 = backtest.df.loc[last_index, 'S_EWA']
         long_mavg = backtest.df.loc[last_index,'L_EWA']
 
@@ -72,12 +102,12 @@ class Strategy:
 
         # Trending trading condition
         trending_buy_condition_1 = macd_diff > 0 and last_macd_diff <= 0 and rsi < 70
-        trending_buy_condition_2 = stock_price > bb_mid and stock_price > ema_10
+        trending_buy_condition_2 = stock_price < bb_upper and stock_price > ema_10
         trending_sell_condition_1 = macd_diff < 0 and last_macd_diff >= 0 and rsi > 70
         trending_sell_condition_2 = stock_price >= bb_upper* 0.95
 
         # Consolidation trading condition
-        consolidation_buy_condition_1 = rsi < 50 
+        consolidation_buy_condition_1 = rsi < 50 and k_stochastic < 40
         consolidation_buy_condition_2 = stock_price <= bb_mid
         consolidation_sell_condition_1 = rsi > 60
         consolidation_sell_condition_2 = stock_price >= bb_mid
@@ -87,7 +117,7 @@ class Strategy:
         trending_market = True
 
         # 動態閾值設為滾動平均的 1.5 倍
-        dynamic_threshold = bb_width_rolling_mean
+        dynamic_threshold = bb_width_rolling_mean 
 
         # 判斷趨勢市場（假設 index 是當前數據點）
         if bb_width > dynamic_threshold.loc[last_index] * 1.5 and ADX > 25:
@@ -100,7 +130,7 @@ class Strategy:
                 if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
                     backtest.df.loc[index, ticker + '_average_cost'] = (
                     backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
-                    buy_qty * stock_price) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
+                    buy_qty * stock_open) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
                 backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
                 backtest.df.loc[index, ticker +'_action_signal'] = 1
 
@@ -114,7 +144,7 @@ class Strategy:
                 if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
                     backtest.df.loc[index, ticker + '_average_cost'] = (
                     backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
-                    buy_qty * stock_price) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
+                    buy_qty * stock_open) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
                 backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
                 backtest.df.loc[index, ticker +'_action_signal'] = 1
 
@@ -124,74 +154,30 @@ class Strategy:
 
         #Equity & cash moving
         position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
-        position_moving_value = position_moving*backtest.df.loc[index, ticker]
-        position_value = backtest.df.loc[index, ticker + '_holding_position']*backtest.df.loc[index, ticker]
+        position_moving_value = position_moving*backtest.df.loc[index, 'Open']
+        position_value = backtest.df.loc[index, ticker + '_holding_position']*backtest.df.loc[index, 'Open']
         if position_moving != 0:
             backtest.df.loc[index, 'Cash'] -= np.sign(position_moving) * abs(position_moving_value)
         backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index, 'Cash'] + position_value
 
 
 ticker = 'NVDA'
-start_day = "2024-7-01"
+start_day = "2024-01-01"
 end_day = "2025-03-20"
 stock_df = yf.download(ticker, start=start_day, end=end_day)
 stock_df.columns = [col[0] for col in stock_df.columns]
 
-# ----------------------------------------
-# 計算 RSI (Relative Strength Index)
-# ----------------------------------------
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()  # 計算每日收盤價變化
-    gain = (delta.where(delta > 0, 0))  # 漲幅
-    loss = (-delta.where(delta < 0, 0))  # 跌幅
-
-    avg_gain = gain.rolling(window=window).mean()  # 平均漲幅
-    avg_loss = loss.rolling(window=window).mean()  # 平均跌幅
-
-    rs = avg_gain / avg_loss  # RS 值
-    rsi = 100 - (100 / (1 + rs))  # RSI 計算公式
-    return rsi
-
-stock_df['RSI'] = calculate_rsi(stock_df)
-
-# ----------------------------------------
-# MACD (Moving Average Convergence Divergence)
-# ----------------------------------------
-def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
-    short_ema = data['Close'].ewm(span=short_window, adjust=False).mean()  # 短期 EMA
-    long_ema = data['Close'].ewm(span=long_window, adjust=False).mean()  # 長期 EMA
-    macd = short_ema - long_ema  # 計算 MACD 線
-    signal = macd.ewm(span=signal_window, adjust=False).mean()  # 計算信號線
-    macd_diff = macd - signal
-    return macd, signal, macd_diff
-
-stock_df['MACD'], stock_df['Signal_Line'], stock_df['MACD_diff']= calculate_macd(stock_df)
-
-# ----------------------------------------
-# Bollinger Bands
-# ----------------------------------------
-def calculate_bollinger_bands(data, window=20):
-    sma = data['Close'].rolling(window=window).mean()  # 計算簡單移動平均線 (SMA)
-    std = data['Close'].rolling(window=window).std()  # 計算標準差
-    upper_band = sma + (2 * std)  # 上軌
-    lower_band = sma - (2 * std)  # 下軌
-    band_width = (upper_band - lower_band) / sma 
-    return sma, upper_band, lower_band, band_width
-
-stock_df['Middle_Band'], stock_df['Upper_Band'], stock_df['Lower_Band'],  stock_df['band_width']= calculate_bollinger_bands(stock_df)
-
-rolling_window = 40
-stock_df['bb_width_mean'] = stock_df['band_width'].rolling(window=rolling_window).mean()
-
+#ADX
 stock_df.ta.adx(length=14, append=True)
 
-stock_df = stock_df.dropna()
+#Stochastic
+stock_df.ta.stoch(append=True)
 
+#set up best_sharpe
 best_sharpe = float('-inf')
 
 ratios = np.arange(30, 45, 5)
-
-        
+     
 for i in ratios:
             
         backtest = Backtest(initial_cash=1000)
@@ -226,7 +212,7 @@ for i in ratios:
 
 print(best_stock, best_ratio, best_sharpe, best_mmd)
 
-optimized_df.to_csv('test2.csv')
+optimized_df.to_csv('backtest_result.csv')
 
 
 fig, (ax_price, ax_rsi, ax_macd) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
@@ -295,5 +281,4 @@ def on_mouse_move(event):
 fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
 
 plt.show()
-    
 
