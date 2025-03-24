@@ -1,68 +1,299 @@
 import pandas as pd
+import pandas_ta as ta
 import yfinance as yf
+import numpy as np
 from frame import Backtest 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 
-
-class SimpleMovingAverageStrategy:
-    def __init__(self, data):
+class Strategy:
+    def __init__(self, data, **kwargs):
         self.data = data
-        self.short_window = 5  
-        self.long_window = 20  
+        self.short_window = 10
+        self.long_window = 25
+        self.volume_window = kwargs.get('volume_window', 1) 
+
+    def add_reference_data(self, backtest, ticker):
+        backtest.df['S_EWA'] = backtest.df[ticker].ewm(span=self.short_window, adjust=False).mean()
+        backtest.df['L_EWA'] = backtest.df[ticker].ewm(span=self.long_window, adjust=False).mean()
+        backtest.df['EWA_diff'] = backtest.df['L_EWA'] - backtest.df['S_EWA'] 
+        backtest.df['Average_Volume'] = backtest.df['Volume'].ewm(span=self.volume_window, adjust=False).mean()
 
     def next(self, ticker, backtest, index):
         current_index = backtest.df.index.get_loc(index)
         if current_index < self.long_window:  
             return
-
-        short_mavg = self.data[ticker].iloc[current_index - self.short_window + 1:current_index + 1].mean()
-        long_mavg = self.data[ticker].iloc[current_index - self.long_window + 1:current_index + 1].mean()
         
         #Take pervious data
         if current_index > 0:
-            index_to_date = backtest.df.index[current_index - 1]
-            backtest.df.loc[index, ticker + '_holding_position'] = backtest.df.loc[index_to_date, ticker + '_holding_position']
-            backtest.df.loc[index, 'Cash'] = backtest.df.loc[index_to_date, 'Cash']
-            backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index_to_date, 'Total_equity']
+            last_index = backtest.df.index[current_index - 1]
+            last2_index = backtest.df.index[current_index - 2]
+            backtest.df.loc[index, ticker + '_holding_position'] = backtest.df.loc[last_index, ticker + '_holding_position']
+            backtest.df.loc[index, ticker + '_holding_market_value'] = backtest.df.loc[index, ticker + '_holding_position'] * backtest.df.loc[index, ticker]
+            backtest.df.loc[index, 'Cash'] = backtest.df.loc[last_index, 'Cash']
+            backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[last_index, 'Total_equity']
+            backtest.df.loc[index, ticker +'_average_cost']  = backtest.df.loc[last_index, ticker +'_average_cost']
 
         #Position 
-        if short_mavg > long_mavg and  backtest.df.loc[index, ticker + '_holding_position'] == 0:
-            backtest.df.loc[index, ticker + '_holding_position'] += 1
+        stock_price = backtest.df.loc[index, ticker]
+        total_equity = backtest.df.loc[index, 'Total_equity']
+        volume = backtest.df.loc[index,'Volume']
+        holding_position = backtest.df.loc[index, ticker + '_holding_position'] 
+        cash = backtest.df.loc[index, 'Cash']
+        volume = backtest.df.loc[index,'Volume']
+        buy_qty = int(cash/stock_price)
+        average_volume = backtest.df.loc[index,'Average_Volume']
+        average_volume = backtest.df.loc[index,'Average_Volume']
+
+        #TA indicator
+        rsi = backtest.df.loc[last_index,'RSI']
+        MACD =  backtest.df.loc[last_index,'MACD']
+        MACD_singal_line =  backtest.df.loc[last_index,'Signal_Line']
+        macd_diff =  backtest.df.loc[last_index,'MACD_diff']
+        last_macd_diff =  backtest.df.loc[last2_index,'MACD_diff']
+        bb_mid = backtest.df.loc[last_index, 'Middle_Band']
+        bb_upper = backtest.df.loc[last_index, 'Upper_Band']
+        bb_lower = backtest.df.loc[last_index, 'Lower_Band']
+        bb_width = (bb_upper - bb_lower) / bb_mid 
+        bb_width_rolling_mean = stock_df['bb_width_mean']
+        ADX = backtest.df.loc[last_index, 'ADX_14']
+        ema_10 = backtest.df.loc[last_index, 'S_EWA']
+        long_mavg = backtest.df.loc[last_index,'L_EWA']
 
 
 
-        elif short_mavg < long_mavg and  backtest.df.loc[index, ticker + '_holding_position'] > 0:
-            backtest.df.loc[index, ticker + '_holding_position'] -= 1
 
+        # Trading condition
+        buy_condition_1 = backtest.df.loc[last_index, 'Cash'] >= stock_price * 1
+        sell_condition_1 = backtest.df.loc[index, ticker + '_holding_position']  > 0
+        stop_lose_condition_1 = stock_price <= backtest.df.loc[index, ticker +'_average_cost']*0.9
+        stop_short_condition_1 = backtest.df.loc[index, ticker + '_holding_market_value']* -1 >( backtest.df.loc[index, 'Cash']/2)*1.3
+
+        # Trending trading condition
+        trending_buy_condition_1 = macd_diff > 0 and last_macd_diff <= 0 and rsi < 70
+        trending_buy_condition_2 = stock_price > bb_mid and stock_price > ema_10
+        trending_sell_condition_1 = macd_diff < 0 and last_macd_diff >= 0 and rsi > 70
+        trending_sell_condition_2 = stock_price >= bb_upper* 0.95
+
+        # Consolidation trading condition
+        consolidation_buy_condition_1 = rsi < 50 
+        consolidation_buy_condition_2 = stock_price <= bb_mid
+        consolidation_sell_condition_1 = rsi > 60
+        consolidation_sell_condition_2 = stock_price >= bb_mid
+
+        
+        #Identify market trend
+        trending_market = True
+
+        # 動態閾值設為滾動平均的 1.5 倍
+        dynamic_threshold = bb_width_rolling_mean
+
+        # 判斷趨勢市場（假設 index 是當前數據點）
+        if bb_width > dynamic_threshold.loc[last_index] * 1.5 and ADX > 25:
+            trending_market = True
+        else:
+            trending_market = False
+
+        if trending_market:
+            if  (buy_condition_1 and trending_buy_condition_1 and trending_buy_condition_2):
+                if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
+                    backtest.df.loc[index, ticker + '_average_cost'] = (
+                    backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
+                    buy_qty * stock_price) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
+                backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
+                backtest.df.loc[index, ticker +'_action_signal'] = 1
+
+            if (sell_condition_1 and trending_sell_condition_1 and trending_sell_condition_2):
+                backtest.df.loc[index, ticker + '_holding_position'] -= holding_position
+                backtest.df.loc[index, ticker +'_action_signal'] = -1
+        
+        else: #consolidation Market
+
+            if  (buy_condition_1 and consolidation_buy_condition_1 and consolidation_buy_condition_2):
+                if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
+                    backtest.df.loc[index, ticker + '_average_cost'] = (
+                    backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
+                    buy_qty * stock_price) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
+                backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
+                backtest.df.loc[index, ticker +'_action_signal'] = 1
+
+            if (sell_condition_1 and consolidation_sell_condition_1 and consolidation_sell_condition_2):
+                backtest.df.loc[index, ticker + '_holding_position'] -= holding_position
+                backtest.df.loc[index, ticker +'_action_signal'] = -1
 
         #Equity & cash moving
-        position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[index_to_date, ticker + '_holding_position']
+        position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
         position_moving_value = position_moving*backtest.df.loc[index, ticker]
         position_value = backtest.df.loc[index, ticker + '_holding_position']*backtest.df.loc[index, ticker]
-        if position_moving > 0:
-            backtest.df.loc[index, 'Cash'] = backtest.df.loc[index, 'Cash'] - position_moving_value
-        elif position_moving < 0:
-            backtest.df.loc[index, 'Cash'] = backtest.df.loc[index, 'Cash'] + position_moving_value*-1
+        if position_moving != 0:
+            backtest.df.loc[index, 'Cash'] -= np.sign(position_moving) * abs(position_moving_value)
         backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index, 'Cash'] + position_value
+
+
+ticker = 'NVDA'
+start_day = "2024-7-01"
+end_day = "2025-03-20"
+stock_df = yf.download(ticker, start=start_day, end=end_day)
+stock_df.columns = [col[0] for col in stock_df.columns]
+
+# ----------------------------------------
+# 計算 RSI (Relative Strength Index)
+# ----------------------------------------
+def calculate_rsi(data, window=14):
+    delta = data['Close'].diff()  # 計算每日收盤價變化
+    gain = (delta.where(delta > 0, 0))  # 漲幅
+    loss = (-delta.where(delta < 0, 0))  # 跌幅
+
+    avg_gain = gain.rolling(window=window).mean()  # 平均漲幅
+    avg_loss = loss.rolling(window=window).mean()  # 平均跌幅
+
+    rs = avg_gain / avg_loss  # RS 值
+    rsi = 100 - (100 / (1 + rs))  # RSI 計算公式
+    return rsi
+
+stock_df['RSI'] = calculate_rsi(stock_df)
+
+# ----------------------------------------
+# MACD (Moving Average Convergence Divergence)
+# ----------------------------------------
+def calculate_macd(data, short_window=12, long_window=26, signal_window=9):
+    short_ema = data['Close'].ewm(span=short_window, adjust=False).mean()  # 短期 EMA
+    long_ema = data['Close'].ewm(span=long_window, adjust=False).mean()  # 長期 EMA
+    macd = short_ema - long_ema  # 計算 MACD 線
+    signal = macd.ewm(span=signal_window, adjust=False).mean()  # 計算信號線
+    macd_diff = macd - signal
+    return macd, signal, macd_diff
+
+stock_df['MACD'], stock_df['Signal_Line'], stock_df['MACD_diff']= calculate_macd(stock_df)
+
+# ----------------------------------------
+# Bollinger Bands
+# ----------------------------------------
+def calculate_bollinger_bands(data, window=20):
+    sma = data['Close'].rolling(window=window).mean()  # 計算簡單移動平均線 (SMA)
+    std = data['Close'].rolling(window=window).std()  # 計算標準差
+    upper_band = sma + (2 * std)  # 上軌
+    lower_band = sma - (2 * std)  # 下軌
+    band_width = (upper_band - lower_band) / sma 
+    return sma, upper_band, lower_band, band_width
+
+stock_df['Middle_Band'], stock_df['Upper_Band'], stock_df['Lower_Band'],  stock_df['band_width']= calculate_bollinger_bands(stock_df)
+
+rolling_window = 40
+stock_df['bb_width_mean'] = stock_df['band_width'].rolling(window=rolling_window).mean()
+
+stock_df.ta.adx(length=14, append=True)
+
+stock_df = stock_df.dropna()
+
+best_sharpe = float('-inf')
+
+ratios = np.arange(30, 45, 5)
+
         
+for i in ratios:
+            
+        backtest = Backtest(initial_cash=1000)
+            
+        backtest.add_data(ticker, stock_df)
+            
+        backtest.add_strategy(Strategy, volume_window=i)
+            
+        backtest.run()
+            
+        backtest.calculate_return()
+            
+        sharpe = backtest.analyse_tool.sharpe_ratio()
+        max_drawdown = backtest.analyse_tool.maximum_drawdown()
+        
+        if sharpe:
+            print(f'Stock:{ticker}')
+            print(f'Volume window:{i}')
+            print(f'SR:{sharpe}')
+            print(f'MMD:{max_drawdown}')
+            
+        test_df = backtest.df
+        test_df.to_csv('test2.csv')
+            
+        if sharpe > best_sharpe:
+            best_stock = ticker
+            best_sharpe = sharpe
+            best_ratio = i
+            best_mmd = max_drawdown
+            optimized_df = backtest.df
 
 
+print(best_stock, best_ratio, best_sharpe, best_mmd)
+
+optimized_df.to_csv('test2.csv')
 
 
+fig, (ax_price, ax_rsi, ax_macd) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+plt.subplots_adjust(hspace=0.1)
 
-if __name__ == "__main__":
+# Price (main)
+ax_price.plot(optimized_df.index, optimized_df[ticker], label=f'{ticker} Price', color='orange')
+ax_price.plot(optimized_df.index, optimized_df['Middle_Band'], label='Middle Band', color='blue', linestyle='--')
+ax_price.plot(optimized_df.index, optimized_df['Upper_Band'], label='Upper Band', color='green', linestyle='--')
+ax_price.plot(optimized_df.index, optimized_df['Lower_Band'], label='Lower Band', color='red', linestyle='--')
+# Buy Sell Singal
+buy_signals = np.where(optimized_df[f'{ticker}_action_signal'] == 1, optimized_df[ticker], np.nan)
+sell_signals = np.where(optimized_df[f'{ticker}_action_signal'] == -1, optimized_df[ticker], np.nan)
+ax_price.scatter(optimized_df.index[~np.isnan(buy_signals)], buy_signals[~np.isnan(buy_signals)],
+                 marker='^', s=75, color='g', label='Buy')
+ax_price.scatter(optimized_df.index[~np.isnan(sell_signals)], sell_signals[~np.isnan(sell_signals)],
+                 marker='v', s=75, color='r', label='Sell')
+ax_price.set_title(f"{ticker} Backtest")
+ax_price.legend(loc='upper left')
 
-    backtest = Backtest(initial_cash=100)
+# RSI 
+ax_rsi.plot(optimized_df.index, optimized_df['RSI'], label='RSI', color='purple')
+ax_rsi.axhline(70, color='red', linestyle='--', label='Overbought')
+ax_rsi.axhline(30, color='green', linestyle='--', label='Oversold')
+ax_rsi.set_ylabel('RSI')
+ax_rsi.legend(loc='upper left')
 
-    ticker = 'AAPL'
-    data = yf.download(ticker, start='2019-11-11', end='2024-11-08')
-    backtest.add_data(ticker, data['Close'])
+# MACD 
+ax_macd.plot(optimized_df.index, optimized_df['MACD'], label='MACD', color='blue')
+ax_macd.plot(optimized_df.index, optimized_df['Signal_Line'], label='Signal Line', color='red')
+ax_macd.bar(optimized_df.index, optimized_df['MACD_diff'], label='MACD Diff', 
+            color='gray', alpha=0.3)
+ax_macd.set_ylabel('MACD')
+ax_macd.legend(loc='upper left')
 
-    backtest.add_strategy(SimpleMovingAverageStrategy)
+ax_macd.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+fig.autofmt_xdate()
 
-    backtest.run()
+vline_ax1 = ax_price.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
+vline_ax2 = ax_rsi.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
+vline_ax3 = ax_macd.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
 
-    test_df = backtest.df
+date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
+                             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+
+def on_mouse_move(event):
+    if event.inaxes in [ax_price, ax_rsi, ax_macd] and event.xdata is not None:
+        xdata = event.xdata
+        cur_date = mdates.num2date(xdata)
+        date_str = cur_date.strftime("%Y-%m-%d")
+        date_annotation.set_text(f"Date: {date_str}")
+        vline_ax1.set_xdata([xdata, xdata])
+        vline_ax2.set_xdata([xdata, xdata])
+        vline_ax3.set_xdata([xdata, xdata])
+        vline_ax1.set_visible(True)
+        vline_ax2.set_visible(True)
+        vline_ax3.set_visible(True)
+        fig.canvas.draw_idle()
+    else:
+        vline_ax1.set_visible(False)
+        vline_ax2.set_visible(False)
+        vline_ax3.set_visible(False)
+        date_annotation.set_text("")
+        fig.canvas.draw_idle()
+
+fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
+
+plt.show()
     
 
