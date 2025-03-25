@@ -20,12 +20,14 @@ class Strategy:
         backtest.df['EWA_diff'] = backtest.df['L_EWA'] - backtest.df['S_EWA'] 
         backtest.df['Average_Volume'] = backtest.df['Volume'].ewm(span=self.volume_window, adjust=False).mean()
 
+        #RSI
         delta = backtest.df[ticker].diff()
         gain = delta.where(delta > 0, 0).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         backtest.df['RSI'] = 100 - (100 / (1 + rs))
 
+        #EMA
         short_ema = backtest.df[ticker].ewm(span=12, adjust=False).mean()
         long_ema = backtest.df[ticker].ewm(span=26, adjust=False).mean()
 
@@ -40,7 +42,7 @@ class Strategy:
         backtest.df['Upper_Band'] = backtest.df['Middle_Band'] + (2 * std)
         backtest.df['Lower_Band'] = backtest.df['Middle_Band'] - (2 * std)
         backtest.df['band_width'] = (backtest.df['Upper_Band'] - backtest.df['Lower_Band']) / backtest.df['Middle_Band'] 
-        rolling_window = 40
+        rolling_window = 60
         backtest.df['bb_width_mean'] = backtest.df['band_width'].rolling(window=rolling_window).mean()
 
         #Drop NaN
@@ -71,7 +73,7 @@ class Strategy:
         volume = backtest.df.loc[index,'Volume']
         buy_qty = int(cash/stock_price)
         average_volume = backtest.df.loc[index,'Average_Volume']
-        average_volume = backtest.df.loc[index,'Average_Volume']
+
 
         #TA indicator
         rsi = backtest.df.loc[last_index,'RSI']
@@ -88,6 +90,8 @@ class Strategy:
         k_stochastic = backtest.df.loc[last_index, 'STOCHk_14_3_3']
         d_stochastic = backtest.df.loc[last_index, 'STOCHk_14_3_3']
         k_d_stochastic_diff = backtest.df.loc[last_index, 'STOCHk_14_3_3'] - backtest.df.loc[last_index, 'STOCHk_14_3_3']
+        supertrend = backtest.df.loc[index,'SuperTrend_Direction']
+        last_supertrend = backtest.df.loc[last_index,'SuperTrend_Direction']
         ema_10 = backtest.df.loc[last_index, 'S_EWA']
         long_mavg = backtest.df.loc[last_index,'L_EWA']
 
@@ -101,8 +105,9 @@ class Strategy:
         stop_short_condition_1 = backtest.df.loc[index, ticker + '_holding_market_value']* -1 >( backtest.df.loc[index, 'Cash']/2)*1.3
 
         # Trending trading condition
-        trending_buy_condition_1 = macd_diff > 0 and last_macd_diff <= 0 and rsi < 70
-        trending_buy_condition_2 = stock_price < bb_upper and stock_price > ema_10
+        trending_buy_condition_1 = macd_diff > 0 and last_macd_diff <= 0 and rsi < 80
+        trending_buy_condition_2 = stock_price >= bb_mid
+        trending_buy_condition_3 = supertrend == -1 and volume > average_volume * 1.5
         trending_sell_condition_1 = macd_diff < 0 and last_macd_diff >= 0 and rsi > 70
         trending_sell_condition_2 = stock_price >= bb_upper* 0.95
 
@@ -120,19 +125,20 @@ class Strategy:
         dynamic_threshold = bb_width_rolling_mean 
 
         # 判斷趨勢市場（假設 index 是當前數據點）
-        if bb_width > dynamic_threshold.loc[last_index] * 1.5 and ADX > 25:
+        if bb_width > dynamic_threshold.loc[last_index] and ADX > 15:
             trending_market = True
         else:
             trending_market = False
 
         if trending_market:
-            if  (buy_condition_1 and trending_buy_condition_1 and trending_buy_condition_2):
+            if  (buy_condition_1 and trending_buy_condition_1 and trending_buy_condition_2) or (buy_condition_1 and trending_buy_condition_3):
                 if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
                     backtest.df.loc[index, ticker + '_average_cost'] = (
                     backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
                     buy_qty * stock_open) / (backtest.df.loc[index, ticker + '_holding_position'] + buy_qty)
                 backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
                 backtest.df.loc[index, ticker +'_action_signal'] = 1
+            
 
             if (sell_condition_1 and trending_sell_condition_1 and trending_sell_condition_2):
                 backtest.df.loc[index, ticker + '_holding_position'] -= holding_position
@@ -173,10 +179,15 @@ stock_df.ta.adx(length=14, append=True)
 #Stochastic
 stock_df.ta.stoch(append=True)
 
+#supertrend
+supertrend = ta.supertrend(stock_df['High'], stock_df['Low'], stock_df['Close'], length=10, multiplier=3)
+stock_df['SuperTrend'] = supertrend['SUPERT_10_3.0']  # SuperTrend 線數值
+stock_df['SuperTrend_Direction'] = supertrend['SUPERTd_10_3.0']
+
 #set up best_sharpe
 best_sharpe = float('-inf')
 
-ratios = np.arange(30, 45, 5)
+ratios = np.arange(20, 40, 5)
      
 for i in ratios:
             
@@ -259,26 +270,41 @@ date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
                              bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 def on_mouse_move(event):
+    # 判斷滑鼠是否在指定子圖內 且 event.xdata 不為 None
     if event.inaxes in [ax_price, ax_rsi, ax_macd] and event.xdata is not None:
         xdata = event.xdata
-        cur_date = mdates.num2date(xdata)
+        cur_date = mdates.num2date(xdata)  # 將數值轉換回日期格式
         date_str = cur_date.strftime("%Y-%m-%d")
-        date_annotation.set_text(f"Date: {date_str}")
-        vline_ax1.set_xdata([xdata, xdata])
-        vline_ax2.set_xdata([xdata, xdata])
-        vline_ax3.set_xdata([xdata, xdata])
-        vline_ax1.set_visible(True)
-        vline_ax2.set_visible(True)
-        vline_ax3.set_visible(True)
+
+        # 將 optimized_df.index 轉換成 datetime 對象，再轉成 matplotlib 所需的數值型態
+        dt_index = pd.to_datetime(optimized_df.index)
+        dates_num = mdates.date2num(dt_index.to_pydatetime())
+        
+        idx = (np.abs(dates_num - xdata)).argmin()
+        nearest_date = optimized_df.index[idx]
+
+        # 取得對應點的 ADX 與 bb_width_mean 數值
+        adx_value = optimized_df.iloc[idx]['ADX_14']
+        bb_with_mean_value = optimized_df.iloc[idx]['bb_width_mean']
+        bb_width_value = optimized_df.iloc[idx]['band_width']
+
+        # 更新圖表的文字註解
+        date_annotation.set_text(
+            f"Date: {date_str}\nADX: {adx_value:.2f}\nBB Width Mean: {bb_with_mean_value:.2f}\nBB Width: {bb_width_value:.2f}"
+        )
+
+        # 更新各子圖的垂直線位置與顯示狀態
+        for vline in [vline_ax1, vline_ax2, vline_ax3]:
+            vline.set_xdata([xdata, xdata])
+            vline.set_visible(True)
         fig.canvas.draw_idle()
     else:
-        vline_ax1.set_visible(False)
-        vline_ax2.set_visible(False)
-        vline_ax3.set_visible(False)
+        # 當滑鼠離開設定區域時，隱藏垂直線與清空文字註解
+        for vline in [vline_ax1, vline_ax2, vline_ax3]:
+            vline.set_visible(False)
         date_annotation.set_text("")
         fig.canvas.draw_idle()
 
 fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
 
 plt.show()
-
