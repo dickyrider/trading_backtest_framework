@@ -121,10 +121,8 @@ class Strategy:
         #Identify market trend
         trending_market = True
 
-        # 動態閾值設為滾動平均的 1.5 倍
         dynamic_threshold = bb_width_rolling_mean 
 
-        # 判斷趨勢市場（假設 index 是當前數據點）
         if bb_width > dynamic_threshold.loc[last_index] and ADX > 15:
             trending_market = True
         else:
@@ -270,36 +268,35 @@ date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
                              bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 def on_mouse_move(event):
-    # 判斷滑鼠是否在指定子圖內 且 event.xdata 不為 None
+
     if event.inaxes in [ax_price, ax_rsi, ax_macd] and event.xdata is not None:
         xdata = event.xdata
-        cur_date = mdates.num2date(xdata)  # 將數值轉換回日期格式
+        cur_date = mdates.num2date(xdata) 
         date_str = cur_date.strftime("%Y-%m-%d")
 
-        # 將 optimized_df.index 轉換成 datetime 對象，再轉成 matplotlib 所需的數值型態
+
         dt_index = pd.to_datetime(optimized_df.index)
         dates_num = mdates.date2num(dt_index.to_pydatetime())
         
         idx = (np.abs(dates_num - xdata)).argmin()
         nearest_date = optimized_df.index[idx]
 
-        # 取得對應點的 ADX 與 bb_width_mean 數值
         adx_value = optimized_df.iloc[idx]['ADX_14']
         bb_with_mean_value = optimized_df.iloc[idx]['bb_width_mean']
         bb_width_value = optimized_df.iloc[idx]['band_width']
 
-        # 更新圖表的文字註解
+
         date_annotation.set_text(
             f"Date: {date_str}\nADX: {adx_value:.2f}\nBB Width Mean: {bb_with_mean_value:.2f}\nBB Width: {bb_width_value:.2f}"
         )
 
-        # 更新各子圖的垂直線位置與顯示狀態
+
         for vline in [vline_ax1, vline_ax2, vline_ax3]:
             vline.set_xdata([xdata, xdata])
             vline.set_visible(True)
         fig.canvas.draw_idle()
     else:
-        # 當滑鼠離開設定區域時，隱藏垂直線與清空文字註解
+
         for vline in [vline_ax1, vline_ax2, vline_ax3]:
             vline.set_visible(False)
         date_annotation.set_text("")
