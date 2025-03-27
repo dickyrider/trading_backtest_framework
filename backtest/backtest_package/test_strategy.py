@@ -45,12 +45,16 @@ class Strategy:
         rolling_window = 60
         backtest.df['bb_width_mean'] = backtest.df['band_width'].rolling(window=rolling_window).mean()
 
+        backtest.df['trending_market'] = ((backtest.df['band_width'] > backtest.df['bb_width_mean']) & 
+                                          (backtest.df['ADX_14'] > 20))
+        backtest.df['test'] = 0
+
         #Drop NaN
         backtest.df.dropna(inplace=True)
 
     def next(self, ticker, backtest, index):
         current_index = backtest.df.index.get_loc(index)
-        if current_index < self.long_window:  
+        if current_index < 2:  #ignore first index 
             return
         
         #Take pervious data
@@ -64,13 +68,12 @@ class Strategy:
             backtest.df.loc[index, ticker +'_average_cost']  = backtest.df.loc[last_index, ticker +'_average_cost']
 
         #Position 
-        stock_price = backtest.df.loc[index, ticker]
+        stock_price = backtest.df.loc[last_index, ticker]
         stock_open = backtest.df.loc[index, 'Open']
         total_equity = backtest.df.loc[index, 'Total_equity']
         volume = backtest.df.loc[index,'Volume']
         holding_position = backtest.df.loc[index, ticker + '_holding_position'] 
         cash = backtest.df.loc[index, 'Cash']
-        volume = backtest.df.loc[index,'Volume']
         buy_qty = int(cash/stock_price)
         average_volume = backtest.df.loc[index,'Average_Volume']
 
@@ -92,6 +95,7 @@ class Strategy:
         k_d_stochastic_diff = backtest.df.loc[last_index, 'STOCHk_14_3_3'] - backtest.df.loc[last_index, 'STOCHk_14_3_3']
         supertrend = backtest.df.loc[index,'SuperTrend_Direction']
         last_supertrend = backtest.df.loc[last_index,'SuperTrend_Direction']
+        trending_market = backtest.df.loc[last_index,'trending_market']
         ema_10 = backtest.df.loc[last_index, 'S_EWA']
         long_mavg = backtest.df.loc[last_index,'L_EWA']
 
@@ -99,7 +103,7 @@ class Strategy:
 
 
         # Trading condition
-        buy_condition_1 = backtest.df.loc[last_index, 'Cash'] >= stock_price * 1
+        buy_condition_1 = backtest.df.loc[last_index, 'Cash'] >= stock_open * 1
         sell_condition_1 = backtest.df.loc[index, ticker + '_holding_position']  > 0
         stop_lose_condition_1 = stock_price <= backtest.df.loc[index, ticker +'_average_cost']*0.9
         stop_short_condition_1 = backtest.df.loc[index, ticker + '_holding_market_value']* -1 >( backtest.df.loc[index, 'Cash']/2)*1.3
@@ -107,26 +111,17 @@ class Strategy:
         # Trending trading condition
         trending_buy_condition_1 = macd_diff > 0 and last_macd_diff <= 0 and rsi < 80
         trending_buy_condition_2 = stock_price >= bb_mid
-        trending_buy_condition_3 = supertrend == -1 and volume > average_volume * 1.5
+        trending_buy_condition_3 = supertrend == -1
         trending_sell_condition_1 = macd_diff < 0 and last_macd_diff >= 0 and rsi > 70
         trending_sell_condition_2 = stock_price >= bb_upper* 0.95
 
         # Consolidation trading condition
-        consolidation_buy_condition_1 = rsi < 50 and k_stochastic < 40
+        consolidation_buy_condition_1 = rsi < 50 
         consolidation_buy_condition_2 = stock_price <= bb_mid
+        consolidation_buy_condition_3 = supertrend == 1 and stock_price >= bb_mid and rsi < 60
         consolidation_sell_condition_1 = rsi > 60
-        consolidation_sell_condition_2 = stock_price >= bb_mid
+        consolidation_sell_condition_2 = stock_price >= bb_mid 
 
-        
-        #Identify market trend
-        trending_market = True
-
-        dynamic_threshold = bb_width_rolling_mean 
-
-        if bb_width > dynamic_threshold.loc[last_index] and ADX > 15:
-            trending_market = True
-        else:
-            trending_market = False
 
         if trending_market:
             if  (buy_condition_1 and trending_buy_condition_1 and trending_buy_condition_2) or (buy_condition_1 and trending_buy_condition_3):
@@ -144,7 +139,7 @@ class Strategy:
         
         else: #consolidation Market
 
-            if  (buy_condition_1 and consolidation_buy_condition_1 and consolidation_buy_condition_2):
+            if  buy_condition_1 and consolidation_buy_condition_1 and consolidation_buy_condition_2:
                 if backtest.df.loc[index, ticker + '_holding_position'] + buy_qty != 0:
                     backtest.df.loc[index, ticker + '_average_cost'] = (
                     backtest.df.loc[index, ticker + '_average_cost'] * backtest.df.loc[index, ticker + '_holding_position'] + 
@@ -152,7 +147,7 @@ class Strategy:
                 backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
                 backtest.df.loc[index, ticker +'_action_signal'] = 1
 
-            if (sell_condition_1 and consolidation_sell_condition_1 and consolidation_sell_condition_2):
+            if sell_condition_1 and consolidation_sell_condition_1 and consolidation_sell_condition_2:
                 backtest.df.loc[index, ticker + '_holding_position'] -= holding_position
                 backtest.df.loc[index, ticker +'_action_signal'] = -1
 
@@ -185,7 +180,7 @@ stock_df['SuperTrend_Direction'] = supertrend['SUPERTd_10_3.0']
 #set up best_sharpe
 best_sharpe = float('-inf')
 
-ratios = np.arange(20, 40, 5)
+ratios = [1,2]
      
 for i in ratios:
             
@@ -264,44 +259,67 @@ vline_ax1 = ax_price.axvline(x=optimized_df.index[0], color='k', linestyle='--',
 vline_ax2 = ax_rsi.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
 vline_ax3 = ax_macd.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
 
+hline_trending_price = ax_price.axhline(y=optimized_df[ticker].iloc[0],
+                                        color='magenta', linestyle='-.', alpha=0.7, visible=False)
+
+hline_trending_rsi = ax_rsi.axhline(y=optimized_df['RSI'].iloc[0],
+                                    color='magenta', linestyle='-.', alpha=0.7, visible=False)
+
 date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
                              bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 def on_mouse_move(event):
-
+    # 判斷滑鼠是否在其中一個子圖，且 event.xdata 有效
     if event.inaxes in [ax_price, ax_rsi, ax_macd] and event.xdata is not None:
         xdata = event.xdata
-        cur_date = mdates.num2date(xdata) 
+        cur_date = mdates.num2date(xdata)
         date_str = cur_date.strftime("%Y-%m-%d")
 
-
+        # 轉換 optimized_df 的 index 日期型態為數值型（以便作比較）
         dt_index = pd.to_datetime(optimized_df.index)
         dates_num = mdates.date2num(dt_index.to_pydatetime())
         
+        # 找出離 xdata 最近的資料點索引
         idx = (np.abs(dates_num - xdata)).argmin()
-        nearest_date = optimized_df.index[idx]
 
         adx_value = optimized_df.iloc[idx]['ADX_14']
-        bb_with_mean_value = optimized_df.iloc[idx]['bb_width_mean']
+        bb_width_mean_value = optimized_df.iloc[idx]['bb_width_mean']
         bb_width_value = optimized_df.iloc[idx]['band_width']
+        trending_market = optimized_df.iloc[idx]['trending_market']
+        supertrend = optimized_df.iloc[idx]['SuperTrend_Direction']
+        stock_open = optimized_df.iloc[idx]['Open']
+        current_price = optimized_df.iloc[idx][ticker]
+        current_rsi = optimized_df.iloc[idx]['RSI']
 
+        bb_width_above_mean = bb_width_value > bb_width_mean_value
 
         date_annotation.set_text(
-            f"Date: {date_str}\nADX: {adx_value:.2f}\nBB Width Mean: {bb_with_mean_value:.2f}\nBB Width: {bb_width_value:.2f}"
+            f"Date: {date_str}\nADX: {adx_value:.2f}\nBB Width > Mean?: {bb_width_above_mean}\nTrending Market: {trending_market}\nSupertrend: {supertrend}\nOpen: {stock_open:.2f}"
         )
-
 
         for vline in [vline_ax1, vline_ax2, vline_ax3]:
             vline.set_xdata([xdata, xdata])
             vline.set_visible(True)
+
+
+            hline_trending_price.set_ydata([current_price, current_price])
+            hline_trending_price.set_visible(True)
+            hline_trending_rsi.set_ydata([current_rsi, current_rsi])
+            hline_trending_rsi.set_visible(True)
+
+
+
+
         fig.canvas.draw_idle()
     else:
 
         for vline in [vline_ax1, vline_ax2, vline_ax3]:
             vline.set_visible(False)
+        hline_trending_price.set_visible(False)
+        hline_trending_rsi.set_visible(False)
         date_annotation.set_text("")
         fig.canvas.draw_idle()
 
 fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
-
 plt.show()
+
