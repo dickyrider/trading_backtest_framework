@@ -19,8 +19,6 @@ class Strategy:
     def add_reference_data(self, backtest, ticker):
         backtest.df['EMA_20'] = backtest.df[ticker].ewm(span=20, adjust=False).mean()
         backtest.df['EMA_100'] = backtest.df[ticker].ewm(span=100, adjust=False).mean()
-        backtest.df['trending_market'] = (backtest.df['ADX_14'] > 30) & (backtest.df[ticker] > backtest.df['EMA_20'])
-
 
         #Drop NaN
         backtest.df.dropna(inplace=True)
@@ -43,7 +41,7 @@ class Strategy:
         price = backtest.df.loc[index, ticker]
         open_price = backtest.df.loc[index, 'Open']
         cash = backtest.df.loc[index, 'Cash']
-        contract_cost = open_price * self.contract_size * self.multiplier
+        contract_cost = open_price * self.contract_size 
         # position related 
         buy_qty = int(cash / contract_cost)
         holding_position = backtest.df.loc[index, ticker + '_holding_position']
@@ -51,95 +49,22 @@ class Strategy:
         # TA indicator
         ema20 = backtest.df.loc[last_index, 'EMA_20']
         ema100 = backtest.df.loc[last_index, 'EMA_100']
-        adx = backtest.df.loc[last_index, 'ADX_14']
-        # MACD
-        macd = backtest.df.loc[last_index, 'MACD_6_19_9']
-        signal_line = backtest.df.loc[last_index, 'MACDs_6_19_9']
-        macd_hist = backtest.df.loc[last_index, 'MACDh_6_19_9']
-        macd_hist_prev = backtest.df.loc[last2_index, 'MACDh_6_19_9']
-        
-        obv = backtest.df.loc[last_index, 'OBV']
-        obv_prev = backtest.df.loc[last2_index, 'OBV']
-        
-        # Bollinger Bands
-        bb_mid = backtest.df.loc[last_index, 'BBM_20_2.0']
-        bb_upper = backtest.df.loc[last_index, 'BBU_20_2.0']
-        bb_lower = backtest.df.loc[last_index, 'BBL_20_2.0']
-        
-        rsi = backtest.df.loc[last_index, 'RSI_14']
-        stoch_k = backtest.df.loc[last_index, 'STOCHk_14_3_3']
-        stoch_d = backtest.df.loc[last_index, 'STOCHd_14_3_3']
-
-        #---------------------------------------------------------
-        # identify market (bull vs bear)
-        #--------------------------------------------------------- 
-
-        bull_market = price > ema100
-        bear_market = price < ema100
 
 
-        #---------------------------------------------------------
-        # trending market strategy (trending market == True)
-        #--------------------------------------------------------- 
 
-        if backtest.df.loc[last_index, 'trending_market']:
-            if bull_market:
-                macd_bull_signal = (macd_hist > 0) and (macd_hist_prev <= 0)
-                obv_bull = obv > obv_prev
-                rsi_confirm = rsi > 50
-                
+        if price > ema20:
 
-                if (price > ema20) and macd_bull_signal and obv_bull and rsi_confirm == rsi > 50 and (cash >= contract_cost):
+            new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
+            backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
+            backtest.df.loc[index, ticker + '_holding_position'] = holding_position + buy_qty
+            backtest.df.loc[index, ticker + '_action_signal'] = 1
 
-                    new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
-                    backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
-                    backtest.df.loc[index, ticker + '_holding_position'] = holding_position + buy_qty
-                    backtest.df.loc[index, ticker + '_action_signal'] = 1
+        if price < ema20:
 
-            elif bear_market:
+            backtest.df.loc[index, ticker + '_holding_position'] = 0
+            backtest.df.loc[index, ticker + '_action_signal'] = -1
 
-                macd_bear_signal = (macd_hist < 0) and (macd_hist_prev >= 0)
-                obv_bear = obv < obv_prev
 
-                if (price < ema20) and macd_bear_signal and obv_bear:
-
-                    backtest.df.loc[index, ticker + '_holding_position'] = holding_position - buy_qty
-                    backtest.df.loc[index, ticker + '_action_signal'] = -1
-
-            if holding_position > 0 and ((macd_hist < 0) or (price < ema20)):
-
-                backtest.df.loc[index, ticker + '_holding_position'] = 0
-                backtest.df.loc[index, ticker + '_action_signal'] = -1
-            elif holding_position < 0 and ((macd_hist > 0) or (price > ema20)):
-
-                backtest.df.loc[index, ticker + '_holding_position'] = 0
-                backtest.df.loc[index, ticker + '_action_signal'] = 1
-        #---------------------------
-        # Consolidating Market (Trending market == False)
-        #---------------------------
-        else:
-
-            if bull_market:
-
-                if (price <= bb_lower) and (rsi < 30 or stoch_k < 20):
-                    new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
-                    backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
-                    backtest.df.loc[index, ticker + '_holding_position'] = holding_position + buy_qty
-                    backtest.df.loc[index, ticker + '_action_signal'] = 1
-
-                elif (price >= bb_upper) and (rsi > 70 or stoch_k > 80):
-                    backtest.df.loc[index, ticker + '_holding_position'] = 0
-                    backtest.df.loc[index, ticker + '_action_signal'] = -1
-
-            elif bear_market:
-
-                if (price >= bb_upper) and (rsi > 70 or stoch_k > 80):
-                    backtest.df.loc[index, ticker + '_holding_position'] = holding_position - buy_qty
-                    backtest.df.loc[index, ticker + '_action_signal'] = -1
-
-                elif (price <= bb_lower) and (rsi < 30 or stoch_k < 20):
-                    backtest.df.loc[index, ticker + '_holding_position'] = 0
-                    backtest.df.loc[index, ticker + '_action_signal'] = 1
 
         #Equity & cash moving
         position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
@@ -149,7 +74,7 @@ class Strategy:
 
 
 ticker = 'BTC-USD'
-start_day = "2024-01-01"
+start_day = "2024-10-01"
 end_day = "2025-03-26"
 stock_df = yf.download(ticker, start=start_day, end=end_day)
 stock_df.columns = [col[0] for col in stock_df.columns]
@@ -183,7 +108,6 @@ stock_df.ta.rsi(length=14, append=True)
 # Stochastic (default 14,3,3)
 stock_df.ta.stoch(append=True)
 # Columns：STOCHk_14_3_3, STOCHd_14_3_3
-
 
 #set up best_sharpe
 best_sharpe = float('-inf')
@@ -253,10 +177,10 @@ ax_rsi.set_ylabel('RSI_14')
 ax_rsi.legend(loc='upper left')
 
 # MACD 
-ax_macd.plot(optimized_df.index, optimized_df['MACD_12_26_9'], label='MACD_12_26_9', color='blue')
-ax_macd.plot(optimized_df.index, optimized_df['MACDs_12_26_9'], label='MACDs_12_26_9 Line', color='red')
+ax_macd.plot(optimized_df.index, optimized_df['MACD_6_19_9'], label='MACD_6_19_9', color='blue')
+ax_macd.plot(optimized_df.index, optimized_df['MACDs_6_19_9'], label='MACDs_6_19_9 Line', color='red')
 
-ax_macd.set_ylabel('MACD_12_26_9')
+ax_macd.set_ylabel('MACD_6_19_9')
 ax_macd.legend(loc='upper left')
 
 ax_macd.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
@@ -282,14 +206,11 @@ def on_mouse_move(event):
         
         idx = (np.abs(dates_num - xdata)).argmin()
         nearest_date = optimized_df.index[idx]
-
-        adx_value = optimized_df.iloc[idx]['ADX_14']
-        trending_market = optimized_df.iloc[idx]['trending_market']
         stock_open = optimized_df.iloc[idx]['Open']
 
 
 
-        date_annotation.set_text(f"Date: {date_str}\nADX: {adx_value:.2f}\nTrending market: {trending_market:.2f}\nOpen: {stock_open:.2f}"
+        date_annotation.set_text(f"Date: {date_str}\nOpen: {stock_open:.2f}"
                                  )
 
 
