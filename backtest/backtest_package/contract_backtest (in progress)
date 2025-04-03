@@ -15,6 +15,7 @@ class Strategy:
         self.volume_window = kwargs.get('volume_window', 1) 
         self.contract_size = kwargs.get('contract_size', 0.001)
         self.multiplier  = kwargs.get('multiplier', 10)
+        self.maintenance_margin_rate = kwargs.get('maintenance_margin_rate', 0.05)
 
     def add_reference_data(self, backtest, ticker):
         backtest.df['EMA_20'] = backtest.df[ticker].ewm(span=20, adjust=False).mean()
@@ -42,39 +43,59 @@ class Strategy:
         open_price = backtest.df.loc[index, 'Open']
         cash = backtest.df.loc[index, 'Cash']
         contract_cost = open_price * self.contract_size 
+        initial_margin = contract_cost/self.multiplier
+
+
         # position related 
-        buy_qty = int(cash / contract_cost)
+        buy_qty = int((cash - (cash/self.multiplier))/ contract_cost)
+        print(buy_qty)
         holding_position = backtest.df.loc[index, ticker + '_holding_position']
         
         # TA indicator
         ema20 = backtest.df.loc[last_index, 'EMA_20']
         ema100 = backtest.df.loc[last_index, 'EMA_100']
 
+        #Trading condition
+        long_condition = backtest.df.loc[index, 'Cash'] > initial_margin*(buy_qty+holding_position)
+        short_condition = backtest.df.loc[index, ticker + '_holding_position'] > 0
+
+        force_close_condition = backtest.df.loc[index, 'Total_equity']*0.05 <  holding_position*self.maintenance_margin_rate*contract_cost
+        
 
 
-        if price > ema20:
+
+        if price > ema20 and long_condition:
 
             new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
             backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
             backtest.df.loc[index, ticker + '_holding_position'] = holding_position + buy_qty
             backtest.df.loc[index, ticker + '_action_signal'] = 1
 
-        if price < ema20:
+        if price < ema20 and short_condition:
 
             backtest.df.loc[index, ticker + '_holding_position'] = 0
             backtest.df.loc[index, ticker + '_action_signal'] = -1
 
+        if force_close_condition:
+            if backtest.df.loc[index, ticker + '_holding_position']>0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = -1
+            if backtest.df.loc[index, ticker + '_holding_position']<0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = 1
+
+            
 
 
         #Equity & cash moving
         position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
-        position_moving_value = position_moving * open_price * self.contract_size * self.multiplier
+        position_moving_value = position_moving * open_price * self.contract_size 
         backtest.df.loc[index, 'Cash'] = backtest.df.loc[last_index, 'Cash'] - position_moving_value
         backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index, 'Cash'] + backtest.df.loc[index, ticker] * backtest.df.loc[index, ticker + '_holding_position'] * self.contract_size * self.multiplier
 
 
 ticker = 'BTC-USD'
-start_day = "2024-10-01"
+start_day = "2024-12-01"
 end_day = "2025-03-26"
 stock_df = yf.download(ticker, start=start_day, end=end_day)
 stock_df.columns = [col[0] for col in stock_df.columns]
@@ -138,7 +159,7 @@ for i in ratios:
         test_df = backtest.df
         test_df.to_csv('test2.csv')
             
-        if sharpe > best_sharpe:
+        if sharpe >= best_sharpe:
             best_stock = ticker
             best_sharpe = sharpe
             best_ratio = i
