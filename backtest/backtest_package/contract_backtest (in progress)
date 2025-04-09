@@ -18,6 +18,7 @@ class Strategy:
         self.maintenance_margin_rate = kwargs.get('maintenance_margin_rate', 0.05)
 
     def add_reference_data(self, backtest, ticker):
+        backtest.df['Margin_requirement'] = 0
         backtest.df['EMA_20'] = backtest.df[ticker].ewm(span=20, adjust=False).mean()
         backtest.df['EMA_100'] = backtest.df[ticker].ewm(span=100, adjust=False).mean()
 
@@ -33,13 +34,14 @@ class Strategy:
         last2_index = backtest.df.index[current_index - 2]
         
         # periouvs data
+        backtest.df.loc[index, 'Margin_requirement'] = backtest.df.loc[last_index, 'Margin_requirement']
         backtest.df.loc[index, ticker + '_holding_position'] = backtest.df.loc[last_index, ticker + '_holding_position']
         backtest.df.loc[index, ticker + '_average_cost'] = backtest.df.loc[last_index, ticker + '_average_cost']
         backtest.df.loc[index, 'Cash'] = backtest.df.loc[last_index, 'Cash']
         backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[last_index, 'Total_equity']
         
         # current market data
-        price = backtest.df.loc[index, ticker]
+        price = backtest.df.loc[last_index, ticker]
         open_price = backtest.df.loc[index, 'Open']
         cash = backtest.df.loc[index, 'Cash']
         contract_cost = open_price * self.contract_size 
@@ -47,8 +49,7 @@ class Strategy:
 
 
         # position related 
-        buy_qty = int((cash - (cash/self.multiplier))/ contract_cost)
-        print(buy_qty)
+        buy_qty = int(cash/initial_margin)
         holding_position = backtest.df.loc[index, ticker + '_holding_position']
         
         # TA indicator
@@ -56,27 +57,27 @@ class Strategy:
         ema100 = backtest.df.loc[last_index, 'EMA_100']
 
         #Trading condition
-        long_condition = backtest.df.loc[index, 'Cash'] > initial_margin*(buy_qty+holding_position)
+        long_condition = backtest.df.loc[index, 'Cash'] > initial_margin*buy_qty+holding_position
         short_condition = backtest.df.loc[index, ticker + '_holding_position'] > 0
 
-        force_close_condition = backtest.df.loc[index, 'Total_equity']*0.05 <  holding_position*self.maintenance_margin_rate*contract_cost
-        
+        force_close_condition = backtest.df.loc[index, 'Total_equity'] <  price*self.contract_size*holding_position*self.maintenance_margin_rate
+
+        stop_profit_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 + 4/100 )<= price
+        stop_loss_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 - 2/100 )>= price
 
 
-
-        if price > ema20 and long_condition:
+        if (price > ema20) and long_condition:
 
             new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
             backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
-            backtest.df.loc[index, ticker + '_holding_position'] = holding_position + buy_qty
+            backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
             backtest.df.loc[index, ticker + '_action_signal'] = 1
 
-        if price < ema20 and short_condition:
-
+        if (price < ema20) and short_condition:
             backtest.df.loc[index, ticker + '_holding_position'] = 0
             backtest.df.loc[index, ticker + '_action_signal'] = -1
 
-        if force_close_condition:
+        if force_close_condition or stop_profit_condition or stop_loss_condition:
             if backtest.df.loc[index, ticker + '_holding_position']>0:
                 backtest.df.loc[index, ticker + '_holding_position'] = 0
                 backtest.df.loc[index, ticker + '_action_signal'] = -1
@@ -89,9 +90,10 @@ class Strategy:
 
         #Equity & cash moving
         position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
-        position_moving_value = position_moving * open_price * self.contract_size 
+        position_moving_value = position_moving *( open_price * self.contract_size)/ self.multiplier
+        backtest.df['Margin_requirement'] += position_moving_value
         backtest.df.loc[index, 'Cash'] = backtest.df.loc[last_index, 'Cash'] - position_moving_value
-        backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index, 'Cash'] + backtest.df.loc[index, ticker] * backtest.df.loc[index, ticker + '_holding_position'] * self.contract_size * self.multiplier
+        backtest.df.loc[index, 'Total_equity'] = backtest.df.loc[index, 'Cash'] + backtest.df.loc[index, ticker] * backtest.df.loc[index, ticker + '_holding_position'] * self.contract_size 
 
 
 ticker = 'BTC-USD'
