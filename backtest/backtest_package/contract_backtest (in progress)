@@ -20,8 +20,21 @@ class Strategy:
     def add_reference_data(self, backtest, ticker):
         backtest.df['Maintenance_Margin'] = 0
         backtest.df['Initial_margin'] = 0
+        backtest.df['force_close_out'] = 0
         backtest.df['EMA_5'] = backtest.df[ticker].ewm(span=5, adjust=False).mean()
-        backtest.df['EMA_20'] = backtest.df[ticker].ewm(span=240, adjust=False).mean()
+        backtest.df['EMA_21'] = backtest.df[ticker].ewm(span=21, adjust=False).mean()
+
+        def compute_rsi(series, period=14):
+            delta = series.diff()
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            avg_gain = gain.rolling(window=period, min_periods=period).mean()
+            avg_loss = loss.rolling(window=period, min_periods=period).mean()
+            rs = avg_gain / avg_loss
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
+
+        backtest.df['RSI'] = compute_rsi(backtest.df[ticker], period=14)
         
 
         #Drop NaN
@@ -48,55 +61,79 @@ class Strategy:
         open_price = backtest.df.loc[index, 'Open']
         cash = backtest.df.loc[index, 'Cash']
         contract_cost = open_price * self.contract_size 
-        initial_margin = int(round(contract_cost/self.multiplier))
+        initial_margin = contract_cost/self.multiplier
+
 
 
 
         # position related 
-        buy_qty = 0
-        if backtest.df.loc[index, ticker + '_holding_position'] == 0:
-            buy_qty =int((cash/2)-1/initial_margin)
+
+        buy_qty =int(((cash/2)-1)/initial_margin)
+
+
+        
 
         holding_position = backtest.df.loc[index, ticker + '_holding_position']
         
         # TA indicator
-        ema20 = backtest.df.loc[last_index, 'EMA_20']
+        ema21 = backtest.df.loc[last_index, 'EMA_21']
         ema5 = backtest.df.loc[last_index, 'EMA_5']
+        rsi = backtest.df.loc[last_index, 'RSI']
 
         #Trading condition
         long_condition = backtest.df.loc[index, 'Cash'] > initial_margin*(buy_qty+holding_position)
+        long_condition2 = price < ema21 and price < ema5 and rsi < 30 
         short_condition = backtest.df.loc[index, ticker + '_holding_position'] >= 0
+        short_condition2 = price > ema21 and price > ema5 and rsi > 70
 
         force_close_condition = holding_position != 0 and backtest.df.loc[index, 'Total_equity'] <  price*self.contract_size*holding_position*self.maintenance_margin_rate
 
         stop_profit_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 + 4/100 )<= price
-        stop_loss_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 - 2/100 )>= price
+        stop_loss_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 - 3/100 )>= price
 
 
-        if (price > ema20) and long_condition:
+        if long_condition2 and long_condition:
             if backtest.df.loc[last_index, ticker + '_holding_position']==0:
                 new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
                 backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
                 backtest.df.loc[index, ticker + '_holding_position'] += buy_qty
                 backtest.df.loc[index, ticker + '_action_signal'] = 1
+            elif backtest.df.loc[last_index, ticker + '_holding_position'] < 0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = 1
 
 
 
-        if (price < ema20):
+        if short_condition2:
             if backtest.df.loc[last_index, ticker + '_holding_position']==0:
                 new_avg_cost = (backtest.df.loc[last_index, ticker + '_average_cost'] * holding_position + open_price * buy_qty) / (holding_position + buy_qty) if (holding_position + buy_qty) != 0 else open_price
                 backtest.df.loc[index, ticker + '_average_cost'] = new_avg_cost
                 backtest.df.loc[index, ticker + '_holding_position'] -= buy_qty
                 backtest.df.loc[index, ticker + '_action_signal'] = -1
+            elif backtest.df.loc[last_index, ticker + '_holding_position'] > 0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = -1
 
 
-        if force_close_condition or stop_profit_condition or stop_loss_condition:
+        if stop_profit_condition or stop_loss_condition:
             if backtest.df.loc[index, ticker + '_holding_position']>0:
                 backtest.df.loc[index, ticker + '_holding_position'] = 0
                 backtest.df.loc[index, ticker + '_action_signal'] = -1
             if backtest.df.loc[index, ticker + '_holding_position']<0:
                 backtest.df.loc[index, ticker + '_holding_position'] = 0
                 backtest.df.loc[index, ticker + '_action_signal'] = 1
+        
+        if force_close_condition :
+            if backtest.df.loc[index, ticker + '_holding_position']>0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = -1
+                backtest.df['force_close_out'] = -1
+
+            if backtest.df.loc[index, ticker + '_holding_position']<0:
+                backtest.df.loc[index, ticker + '_holding_position'] = 0
+                backtest.df.loc[index, ticker + '_action_signal'] = 1
+                backtest.df['force_close_out'] = 1
+
 
             
 
@@ -106,7 +143,7 @@ class Strategy:
 
         #Position moving
         position_moving =   backtest.df.loc[index, ticker + '_holding_position'] - backtest.df.loc[last_index, ticker + '_holding_position']
-        position_moving_value = position_moving * open_price * self.contract_size
+        position_moving_value = position_moving * contract_cost
         
         #Maintenance Margin
         backtest.df['Maintenance_Margin'] = (backtest.df.loc[index, ticker + '_holding_position']* self.contract_size * backtest.df.loc[index, ticker + '_average_cost'] *self.maintenance_margin_rate ) 
@@ -115,13 +152,26 @@ class Strategy:
         if backtest.df.loc[index, ticker + '_holding_position'] !=0 or backtest.df.loc[last_index, ticker + '_holding_position']!=0:
             initial_margin_per_unit =backtest.df.loc[last_index, 'Initial_margin'] / abs(backtest.df.loc[last_index, ticker + '_holding_position'])
 
-        #PnL    
-        reaslied_pnl = position_moving * (open_price - backtest.df.loc[index, ticker + '_average_cost']) * self.contract_size
-        unrealised_pnl = backtest.df.loc[index, ticker + '_holding_position'] * (backtest.df.loc[index, ticker] - backtest.df.loc[index, ticker + '_average_cost'])* self.contract_size
+        #PnL 
+        reaslied_pnl = 0
+        unrealised_pnl = 0
+        # Long unrealised PnL   
+        if backtest.df.loc[index, ticker + '_holding_position'] > 0:
+            unrealised_pnl = backtest.df.loc[index, ticker + '_holding_position'] * (backtest.df.loc[index, ticker] - backtest.df.loc[index, ticker + '_average_cost'])* self.contract_size
+        # Short unrealised PnL
+        elif backtest.df.loc[index, ticker + '_holding_position'] < 0:
+            unrealised_pnl = backtest.df.loc[index, ticker + '_holding_position'] * (backtest.df.loc[index, ticker + '_average_cost'] - backtest.df.loc[index, ticker])* self.contract_size
+
+        # Long realised PnL   
+        if backtest.df.loc[index, ticker + '_holding_position'] == 0 and backtest.df.loc[last_index, ticker + '_holding_position'] > 0:
+            reaslied_pnl = position_moving * (open_price - backtest.df.loc[index, ticker + '_average_cost']) * self.contract_size
+        # Short realised PnL   
+        elif backtest.df.loc[index, ticker + '_holding_position'] == 0 and backtest.df.loc[last_index, ticker + '_holding_position'] < 0:
+            reaslied_pnl = position_moving * (backtest.df.loc[index, ticker + '_average_cost']-open_price) * self.contract_size
 
         #Cash and Initial margin move when postion moving
         if abs(backtest.df.loc[index, ticker + '_holding_position']) > abs(backtest.df.loc[last_index, ticker + '_holding_position']):
-            backtest.df.loc[index, 'Initial_margin'] += (position_moving_value/ self.multiplier)
+            backtest.df.loc[index, 'Initial_margin'] += abs(position_moving_value/ self.multiplier)
             backtest.df.loc[index, 'Cash'] -= backtest.df.loc[index, 'Initial_margin'] 
         elif abs(backtest.df.loc[index, ticker + '_holding_position']) < abs(backtest.df.loc[last_index, ticker + '_holding_position']):
             backtest.df.loc[index, 'Initial_margin'] -= initial_margin_per_unit*abs(position_moving)
@@ -133,7 +183,7 @@ class Strategy:
 ticker = 'BTC'
 start_day = "2024-12-01"
 end_day = "2025-03-26"
-stock_df = pd.read_csv('btc_data.csv')
+stock_df = pd.read_csv('btc_1hour_data.csv')
 stock_df.set_index('Date', inplace=True)  
 
 
@@ -182,10 +232,10 @@ optimized_df.to_csv('backtest_result.csv')
 
 optimized_df.index = pd.to_datetime(optimized_df.index, format="%Y-%m-%d %H:%M:%S", errors='coerce')
 
-# 檢查轉換後的類型
+
 print("Index type after conversion:", optimized_df.index.dtype)
 
-# 檢查是否有無法解析的數據
+
 if optimized_df.index.isna().any():
     print("Warning: Some index values could not be converted to datetime. Check the data:")
     print(optimized_df.index[optimized_df.index.isna()])
@@ -209,14 +259,14 @@ ax_price.legend(loc='upper left')
 
 
 time_delta = optimized_df.index.max() - optimized_df.index.min()
-if time_delta.days > 7:  # 如果數據範圍超過 7 天
-    ax_price.xaxis.set_major_locator(mdates.DayLocator(interval=24))  # 每天一個刻度
+if time_delta.days > 7:  
+    ax_price.xaxis.set_major_locator(mdates.DayLocator(interval=24))  
     ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
 else:
-    ax_price.xaxis.set_major_locator(mdates.HourLocator(interval=4))  # 每 4 小時一個刻度
+    ax_price.xaxis.set_major_locator(mdates.HourLocator(interval=4))  
     ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
 
-ax_price.xaxis.set_minor_locator(mdates.HourLocator(interval=24))  # 每小時一個小刻度（可選）
+ax_price.xaxis.set_minor_locator(mdates.HourLocator(interval=24))  
 plt.setp(ax_price.get_xticklabels(), rotation=45, ha='right')
 
 
