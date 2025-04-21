@@ -7,34 +7,37 @@ api_key = #api_key
 api_secret = #secret_key
 
 
+# Create Binance client
 client = Client(api_key, api_secret)
 
+# Set parameters
+symbol = "BTCUSDT"
+interval = Client.KLINE_INTERVAL_1HOUR  # 15-minute interval
+start_str = "1 Apr, 2024"
+end_str = "1 Apr, 2025"
 
-symbol = "BTCUSDT"                      
-interval = Client.KLINE_INTERVAL_1HOUR  # Hourly data
-start_str = "1 Jan, 2022"                
-end_str = "1 Apr, 2025"                  
-
-
+# Fetch historical K-line data
 klines = client.get_historical_klines(symbol, interval, start_str, end_str)
 
-# Turn to dataframe
+# Define column names
 columns = [
-    "Open Time", "Open", "High", "Low", "Close", "Volume",
+    "Date", "Open", "High", "Low", "Close", "Volume",
     "Close Time", "Quote Asset Volume", "Number of Trades",
     "Taker Buy Base Asset Volume", "Taker Buy Quote Asset Volume", "Ignore"
 ]
+
+# Convert to DataFrame
 df = pd.DataFrame(klines, columns=columns)
 
-
-df["Open Time"] = pd.to_datetime(df["Open Time"], unit="ms")
+# Convert timestamps to datetime
+df["Date"] = pd.to_datetime(df["Date"], unit="ms")
 df["Close Time"] = pd.to_datetime(df["Close Time"], unit="ms")
 
-# Turn to Yfinance format
-df = df[["Open Time", "Open", "High", "Low", "Close", "Volume"]]
+# Select relevant columns and set index
+df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+df.set_index('Date', inplace=True)
+df = df[['Close', 'High', 'Low', 'Open', 'Volume']]
 
 
-print(df.head())
-
-df.to_csv('btc_data.csv')
-print("Data saved to btc_data.csv")
+# Save data to CSV
+df.to_csv('btc_15min_data.csv')
