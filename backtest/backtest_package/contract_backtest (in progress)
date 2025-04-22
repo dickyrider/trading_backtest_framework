@@ -308,17 +308,17 @@ date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
                              bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 def on_mouse_move(event):
-    # 判斷滑鼠是否在其中一個子圖，且 event.xdata 有效
+
     if event.inaxes in [ax_price, ax_rsi] and event.xdata is not None:
         xdata = event.xdata
         cur_date = mdates.num2date(xdata)
         date_str = cur_date.strftime("%Y-%m-%d")
 
-        # 轉換 optimized_df 的 index 日期型態為數值型（以便作比較）
+
         dt_index = pd.to_datetime(optimized_df.index)
         dates_num = mdates.date2num(dt_index.to_pydatetime())
         
-        # 找出離 xdata 最近的資料點索引
+
         idx = (np.abs(dates_num - xdata)).argmin()
 
 
