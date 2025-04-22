@@ -35,6 +35,30 @@ class Strategy:
             return rsi
 
         backtest.df['RSI'] = compute_rsi(backtest.df[ticker], period=14)
+
+        #EMA
+        short_ema = backtest.df[ticker].ewm(span=12, adjust=False).mean()
+        long_ema = backtest.df[ticker].ewm(span=26, adjust=False).mean()
+
+
+        #MACD
+        backtest.df['MACD'] = short_ema - long_ema
+        backtest.df['Signal_Line'] = backtest.df['MACD'].ewm(span=9, adjust=False).mean()
+        backtest.df['MACD_diff'] = backtest.df['MACD'] - backtest.df['Signal_Line']
+
+        #Bollinger Band
+        backtest.df['Middle_Band'] = backtest.df[ticker].rolling(window=20).mean()
+        std = backtest.df[ticker].rolling(window=20).std()
+        backtest.df['Upper_Band'] = backtest.df['Middle_Band'] + (2 * std)
+        backtest.df['Lower_Band'] = backtest.df['Middle_Band'] - (2 * std)
+
+
+
+        backtest.df['test'] = 0
+
+        #Drop NaN
+        backtest.df.dropna(inplace=True)
+
         
 
         #Drop NaN
@@ -82,13 +106,13 @@ class Strategy:
 
         #Trading condition
         long_condition = backtest.df.loc[index, 'Cash'] > initial_margin*(buy_qty+holding_position)
-        long_condition2 = price < ema21 and price < ema5 and rsi < 30 
+        long_condition2 = price < ema21 and price < ema5 and rsi < 25
         short_condition = backtest.df.loc[index, ticker + '_holding_position'] >= 0
-        short_condition2 = price > ema21 and price > ema5 and rsi > 70
+        short_condition2 = price > ema21 and price > ema5 and rsi > 75
 
         force_close_condition = holding_position != 0 and backtest.df.loc[index, 'Total_equity'] <  price*self.contract_size*holding_position*self.maintenance_margin_rate
 
-        stop_profit_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 + 4/100 )<= price
+        stop_profit_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 + 6/100 )<= price
         stop_loss_condition = holding_position != 0 and backtest.df.loc[last_index, ticker + '_average_cost'] * (1 - 3/100 )>= price
 
 
@@ -127,12 +151,12 @@ class Strategy:
             if backtest.df.loc[index, ticker + '_holding_position']>0:
                 backtest.df.loc[index, ticker + '_holding_position'] = 0
                 backtest.df.loc[index, ticker + '_action_signal'] = -1
-                backtest.df['force_close_out'] = -1
+                backtest.df[index, ticker +'force_close_out'] = -1
 
-            if backtest.df.loc[index, ticker + '_holding_position']<0:
+            elif backtest.df.loc[index, ticker + '_holding_position']<0:
                 backtest.df.loc[index, ticker + '_holding_position'] = 0
                 backtest.df.loc[index, ticker + '_action_signal'] = 1
-                backtest.df['force_close_out'] = 1
+                backtest.df[index, ticker +'force_close_out'] = 1
 
 
             
@@ -241,13 +265,15 @@ if optimized_df.index.isna().any():
     print(optimized_df.index[optimized_df.index.isna()])
 
 
-fig, (ax_price) = plt.subplots(1, 1, figsize=(14, 10), sharex=True)
+fig, (ax_price, ax_rsi) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
 plt.subplots_adjust(hspace=0.1)
 
-
+# Price (main)
 ax_price.plot(optimized_df.index, optimized_df[ticker], label=f'{ticker} Price', color='orange')
+ax_price.plot(optimized_df.index, optimized_df['EMA_21'], label='21 day EMA', color='blue', linestyle='--')
+ax_price.plot(optimized_df.index, optimized_df['EMA_5'], label='5 day EMA', color='green', linestyle='--')
 
-
+# Buy Sell Singal
 buy_signals = np.where(optimized_df[f'{ticker}_action_signal'] == 1, optimized_df[ticker], np.nan)
 sell_signals = np.where(optimized_df[f'{ticker}_action_signal'] == -1, optimized_df[ticker], np.nan)
 ax_price.scatter(optimized_df.index[~np.isnan(buy_signals)], buy_signals[~np.isnan(buy_signals)],
@@ -257,50 +283,76 @@ ax_price.scatter(optimized_df.index[~np.isnan(sell_signals)], sell_signals[~np.i
 ax_price.set_title(f"{ticker} Backtest")
 ax_price.legend(loc='upper left')
 
+# RSI 
+ax_rsi.plot(optimized_df.index, optimized_df['RSI'], label='RSI', color='purple')
+ax_rsi.axhline(70, color='red', linestyle='--', label='Overbought')
+ax_rsi.axhline(30, color='green', linestyle='--', label='Oversold')
+ax_rsi.set_ylabel('RSI')
+ax_rsi.legend(loc='upper left')
 
-time_delta = optimized_df.index.max() - optimized_df.index.min()
-if time_delta.days > 7:  
-    ax_price.xaxis.set_major_locator(mdates.DayLocator(interval=24))  
-    ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-else:
-    ax_price.xaxis.set_major_locator(mdates.HourLocator(interval=4))  
-    ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
 
-ax_price.xaxis.set_minor_locator(mdates.HourLocator(interval=24))  
-plt.setp(ax_price.get_xticklabels(), rotation=45, ha='right')
-
+ax_rsi.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M:%S"))
+fig.autofmt_xdate()
 
 vline_ax1 = ax_price.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
-date_annotation = ax_price.text(0.90, 0.90, "", transform=ax_price.transAxes,
-                               bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+vline_ax2 = ax_rsi.axvline(x=optimized_df.index[0], color='k', linestyle='--', alpha=0.5, visible=False)
 
+
+hline_trending_price = ax_price.axhline(y=optimized_df[ticker].iloc[0],
+                                        color='magenta', linestyle='-.', alpha=0.7, visible=False)
+
+hline_trending_rsi = ax_rsi.axhline(y=optimized_df['RSI'].iloc[0],
+                                    color='magenta', linestyle='-.', alpha=0.7, visible=False)
+
+date_annotation = ax_price.text(0.98, 0.90, "", transform=ax_price.transAxes,
+                             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
 def on_mouse_move(event):
-    if event.inaxes in [ax_price] and event.xdata is not None:
+    # 判斷滑鼠是否在其中一個子圖，且 event.xdata 有效
+    if event.inaxes in [ax_price, ax_rsi] and event.xdata is not None:
         xdata = event.xdata
         cur_date = mdates.num2date(xdata)
-        date_str = cur_date.strftime("%Y-%m-%d %H:%M")
+        date_str = cur_date.strftime("%Y-%m-%d")
 
+        # 轉換 optimized_df 的 index 日期型態為數值型（以便作比較）
         dt_index = pd.to_datetime(optimized_df.index)
         dates_num = mdates.date2num(dt_index.to_pydatetime())
         
+        # 找出離 xdata 最近的資料點索引
         idx = (np.abs(dates_num - xdata)).argmin()
-        nearest_date = optimized_df.index[idx]
-        stock_open = optimized_df.iloc[idx]['Open'] if not pd.isna(optimized_df.iloc[idx]['Open']) else "N/A"
 
-        date_annotation.set_text(f"Date: {date_str}\nOpen: {stock_open if stock_open != 'N/A' else 'N/A'}")
 
-        for vline in [vline_ax1]:
+        stock_open = optimized_df.iloc[idx]['Open']
+        current_price = optimized_df.iloc[idx][ticker]
+        current_rsi = optimized_df.iloc[idx]['RSI']
+
+
+        date_annotation.set_text(
+            f"Date: {date_str}\nOpen: {stock_open:.2f}\nPrice: {current_price:.2f}\nRSI: {current_rsi:.2f}"
+        )
+
+        for vline in [vline_ax1, vline_ax2]:
             vline.set_xdata([xdata, xdata])
             vline.set_visible(True)
+
+
+            hline_trending_price.set_ydata([current_price, current_price])
+            hline_trending_price.set_visible(True)
+            hline_trending_rsi.set_ydata([current_rsi, current_rsi])
+            hline_trending_rsi.set_visible(True)
+
+
+
+
         fig.canvas.draw_idle()
     else:
-        for vline in [vline_ax1]:
+
+        for vline in [vline_ax1, vline_ax2]:
             vline.set_visible(False)
+        hline_trending_price.set_visible(False)
+        hline_trending_rsi.set_visible(False)
         date_annotation.set_text("")
         fig.canvas.draw_idle()
 
 fig.canvas.mpl_connect('motion_notify_event', on_mouse_move)
-
-plt.tight_layout()
 plt.show()
