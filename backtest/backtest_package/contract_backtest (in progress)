@@ -173,10 +173,10 @@ class Strategy:
 
         # Long realised PnL   
         if backtest.df.loc[index, ticker + '_holding_position'] == 0 and backtest.df.loc[last_index, ticker + '_holding_position'] > 0:
-            reaslied_pnl = position_moving * (open_price - backtest.df.loc[index, ticker + '_average_cost']) * self.contract_size
+            reaslied_pnl = abs(position_moving) * (open_price - backtest.df.loc[index, ticker + '_average_cost']) * self.contract_size
         # Short realised PnL   
         elif backtest.df.loc[index, ticker + '_holding_position'] == 0 and backtest.df.loc[last_index, ticker + '_holding_position'] < 0:
-            reaslied_pnl = position_moving * (backtest.df.loc[index, ticker + '_average_cost']-open_price) * self.contract_size
+            reaslied_pnl = abs(position_moving) * (backtest.df.loc[index, ticker + '_average_cost']-open_price) * self.contract_size
 
         #Cash and Initial margin move when postion moving
         if abs(backtest.df.loc[index, ticker + '_holding_position']) > abs(backtest.df.loc[last_index, ticker + '_holding_position']):
