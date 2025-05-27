@@ -3,7 +3,7 @@ import numpy as np
 
 class framework:
     def __init__(self, initial_cash=0):
-        self.df = pd.DataFrame()  # 存储不同股票的数据
+        self.df = pd.DataFrame()  
         self.df['Total_equity'] = 0
         self.df['Cash'] = 0
         self.strategies = []
